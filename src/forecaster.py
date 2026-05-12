@@ -38,6 +38,7 @@ def fetch_forecast() -> pd.DataFrame:
             "longitude"              : LON,
             "daily"                  : [
                 "temperature_2m_max",
+                "temperature_2m_min",
                 "relative_humidity_2m_max",
                 "wind_speed_10m_max",
                 "precipitation_sum",
@@ -77,18 +78,36 @@ def fetch_forecast() -> pd.DataFrame:
     X_scaled     = scaler.transform(X)
     predictions  = rf_model.predict(X_scaled)
 
-    # ── 4. Build results DataFrame ────────────────────────────────────────────
+    # ── 4. Compute enhanced metrics ───────────────────────────────────────────
+    LOW_HUMIDITY_THRESHOLD = 30  # percent
+    humidity_max = df.get("relative_humidity_2m_max", pd.Series([None]*len(dates)))
+    humidity_min = df.get("relative_humidity_2m_min", pd.Series([None]*len(dates)))
+    temp_min     = df.get("temperature_2m_min",       pd.Series([None]*len(dates)))
+
+    low_humidity_events = (humidity_max < LOW_HUMIDITY_THRESHOLD).astype(int).values
+
+    # ── 5. Build results DataFrame ────────────────────────────────────────────
     results = pd.DataFrame({
-        "date"          : dates,
-        "cluster"       : predictions,
-        "label"         : [CLUSTER_PLAN[c]["label"]     for c in predictions],
-        "emoji"         : [CLUSTER_PLAN[c]["emoji"]     for c in predictions],
-        "frequency"     : [CLUSTER_PLAN[c]["frequency"] for c in predictions],
-        "power"         : [CLUSTER_PLAN[c]["power"]     for c in predictions],
-        "temp"          : X["temp"].values,
-        "humidity"      : X["humidity"].values,
-        "rain"          : X["rain"].values,
+        "date"                : dates,
+        "cluster"             : predictions,
+        "label"               : [CLUSTER_PLAN[c]["label"]     for c in predictions],
+        "emoji"               : [CLUSTER_PLAN[c]["emoji"]     for c in predictions],
+        "frequency"           : [CLUSTER_PLAN[c]["frequency"] for c in predictions],
+        "power"               : [CLUSTER_PLAN[c]["power"]     for c in predictions],
+        "temp_max"            : X["temp"].values,
+        "temp_min"            : temp_min.values,
+        "humidity_max"        : humidity_max.values,
+        "humidity_min"        : humidity_min.values,
+        "humidity_avg"        : X["humidity"].values,
+        "low_humidity_event"  : low_humidity_events,
+        "rain"                : X["rain"].values,
     })
+
+    # ── Override to 0 irrigation if all 7 days are humid enough ───────────────
+    if low_humidity_events.sum() == 0:
+        results["frequency"] = 0
+        results["power"]     = "NONE"
+        results["label"]     = "WET"
 
     return results
 
@@ -104,30 +123,38 @@ def get_today_plan(forecast_df: pd.DataFrame) -> dict:
 
     r = row.iloc[0]
     return {
-        "date"      : r["date"],
-        "cluster"   : int(r["cluster"]),
-        "label"     : r["label"],
-        "emoji"     : r["emoji"],
-        "frequency" : int(r["frequency"]),
-        "power"     : r["power"],
+        "date"              : r["date"],
+        "cluster"           : int(r["cluster"]),
+        "label"             : r["label"],
+        "emoji"             : r["emoji"],
+        "frequency"         : int(r["frequency"]),
+        "power"             : r["power"],
+        "temp_max"          : float(r.get("temp_max", r.get("temp", 0))),
+        "temp_min"          : float(r.get("temp_min", 0)),
+        "humidity_max"      : float(r.get("humidity_max", r.get("humidity_avg", 0))),
+        "humidity_min"      : float(r.get("humidity_min", 0)),
+        "humidity_avg"      : float(r.get("humidity_avg", r.get("humidity", 0))),
+        "low_humidity_event": bool(r.get("low_humidity_event", False)),
     }
 
 
 def print_forecast(forecast_df: pd.DataFrame):
     """Pretty-print the 7-day forecast plan."""
-    print("\n" + "=" * 66)
+    print("\n" + "=" * 72)
     print("  📅  7-Day Strategic Irrigation Forecast")
-    print("=" * 66)
+    print("=" * 72)
     for _, row in forecast_df.iterrows():
+        low_flag = " !LOW" if row.get("low_humidity_event") else ""
         print(
             f"  {row['date'].strftime('%a %d %b')}  {row['emoji']}  "
             f"{row['label']:4s}  →  "
             f"{'x'+str(row['frequency'])+'/week':8s}  "
             f"Power: {row['power']:4s}  "
-            f"| Temp: {row['temp']:.1f}°C  "
+            f"| Temp: {row.get('temp_max', row.get('temp', 0)):.1f}°C  "
+            f"Hum: {row.get('humidity_max', row.get('humidity_avg', 0)):.0f}%{low_flag}  "
             f"Rain: {row['rain']:.1f}mm"
         )
-    print("=" * 66)
+    print("=" * 72)
 
 
 if __name__ == "__main__":

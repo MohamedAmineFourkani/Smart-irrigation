@@ -273,26 +273,58 @@ def badge_for_power(power):
     }
     return mapping.get(power, "badge-dim")
 
+ALERT_COOLDOWN_SEC = 120  # don't repeat the same alert type within 2 minutes
+
 def generate_alerts(latest, df):
     alerts = []
+    now_ts = datetime.now(MOROCCO_TZ)
+
+    # ── Initialise alert cooldown tracker ─────────────────────────────────────
+    if "_alert_last" not in st.session_state:
+        st.session_state["_alert_last"] = {}
+
+    def should_alert(key: str) -> bool:
+        last = st.session_state["_alert_last"].get(key)
+        if last and (now_ts - last).total_seconds() < ALERT_COOLDOWN_SEC:
+            return False
+        st.session_state["_alert_last"][key] = now_ts
+        return True
+
     if latest:
         w = latest.get("water_SOIL")
+        ts = latest.get("timestamp")
+
+        # ── Sensor connection status ──────────────────────────────────────────
+        if ts is not None:
+            age_min = (now_ts - ts).total_seconds() / 60
+            if age_min > 60 and should_alert("sensor_offline"):
+                alerts.append(("red",    "📡", f"Sensor offline for {age_min:.0f} minutes!"))
+            elif age_min > 30 and should_alert("sensor_stale"):
+                alerts.append(("orange", "📡", f"Sensor stale — last reading {age_min:.0f} min ago"))
+
         if w is not None:
-            if w < 5:
+            if w < 5 and should_alert("emergency_low"):
                 alerts.append(("red",    "🚨", f"EMERGENCY: Moisture critically low at {w:.1f}%!"))
-            elif w < 15:
+            elif w < 15 and should_alert("below_threshold"):
                 alerts.append(("red",    "⚠️", f"Moisture below threshold: {w:.1f}% — irrigation may be needed"))
-            elif w < 20:
+            elif w < 20 and should_alert("approaching"):
                 alerts.append(("orange", "🟠", f"Moisture approaching threshold: {w:.1f}%"))
-        if latest.get("pump_on"):
+        if latest.get("pump_on") and should_alert("pump_on"):
             alerts.append(("green",  "💧", f"Pump activated — {latest.get('decision_source', '')}"))
-        if latest.get("decision_source") == "ERROR":
+        if latest.get("decision_source") == "ERROR" and should_alert("api_error"):
             alerts.append(("blue",   "❌", f"API Error: {latest.get('reason', 'Unknown error')}"))
+        if latest.get("decision_source") == "SENSOR_OFFLINE" and should_alert("sensor_down"):
+            alerts.append(("red",   "📡", f"Sensor offline: {latest.get('reason', 'No data')}"))
+        if latest.get("decision_source") == "INVALID_DATA" and should_alert("bad_data"):
+            alerts.append(("red",   "⚠️", f"Invalid sensor data: {latest.get('reason', '')}"))
+        if latest.get("decision_source") == "PLANNER_VETO" and should_alert("planner_veto"):
+            alerts.append(("blue",  "🛡️", f"Planner vetoed: {latest.get('reason', '')}"))
         bat = latest.get("BatV")
-        if bat and bat < 3.0:
+        if bat and bat < 3.0 and should_alert("battery_low"):
             alerts.append(("orange", "🔋", f"Battery low: {bat:.2f}V"))
     if not alerts:
-        alerts.append(("green", "✅", "All systems nominal"))
+        if should_alert("nominal"):
+            alerts.append(("green", "✅", "All systems nominal"))
     return alerts
 
 
@@ -324,7 +356,7 @@ def main():
     st.markdown('<div class="section-title">Live Sensor Data</div>',
                 unsafe_allow_html=True)
 
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
 
     water  = latest.get("water_SOIL")   if has_data else None
     temp   = latest.get("temp_SOIL")    if has_data else None
@@ -334,6 +366,23 @@ def main():
     ts     = latest.get("timestamp")    if has_data else None
 
     w_col  = moisture_colour(water)
+
+    # ── Connection status ─────────────────────────────────────────────────────
+    now_ts = datetime.now(MOROCCO_TZ)
+    if ts is not None:
+        age_min = (now_ts - ts).total_seconds() / 60
+        if age_min < 30:
+            conn_status = "🟢 Connected"
+            conn_colour = "green"
+        elif age_min < 60:
+            conn_status = "🟠 Stale"
+            conn_colour = "orange"
+        else:
+            conn_status = "🔴 Offline"
+            conn_colour = "red"
+    else:
+        conn_status = "⚫ No data"
+        conn_colour = "dim"
 
     with c1:
         st.markdown(f"""
@@ -387,6 +436,57 @@ def main():
                 <div class="metric-sub">
                     {latest.get('decision_source', '—') if has_data else '—'}
                 </div>
+            </div>""", unsafe_allow_html=True)
+
+    with c6:
+        st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-label">📡 Connection</div>
+                <div class="metric-value {conn_colour}">{conn_status}</div>
+                <div class="metric-sub">
+                    {ts.strftime('%H:%M:%S') if ts else '—'}
+                </div>
+            </div>""", unsafe_allow_html=True)
+
+    # ── SECTION 1b: Safety Status ─────────────────────────────────────────────
+    st.markdown('<div class="section-title">Safety Status</div>',
+                unsafe_allow_html=True)
+
+    sa1, sa2, sa3 = st.columns(3)
+
+    cd_remin  = latest.get("cooldown_remaining", "") if has_data else ""
+    daily_use = latest.get("daily_used", "—") if has_data else "—"
+
+    with sa1:
+        st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-label">⏳ Cooldown Remaining</div>
+                <div class="metric-value blue">
+                    {cd_remin if cd_remin else "None"}
+                </div>
+                <div class="metric-sub">Between irrigation cycles</div>
+            </div>""", unsafe_allow_html=True)
+
+    with sa2:
+        st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-label">📊 Daily Water Budget</div>
+                <div class="metric-value green">
+                    {daily_use}
+                </div>
+                <div class="metric-sub">Used / Max</div>
+            </div>""", unsafe_allow_html=True)
+
+    with sa3:
+        ai_prob = latest.get("ai_probability", 0) if has_data else 0
+        ai_pred = latest.get("ai_prediction", 0) if has_data else 0
+        ai_txt  = "IRRIGATE" if ai_pred else "NO ACTION"
+        ai_col  = "red" if ai_pred else "green"
+        st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-label">🤖 AI Model Status</div>
+                <div class="metric-value {ai_col}">{ai_txt}</div>
+                <div class="metric-sub">Confidence: {ai_prob:.0%}</div>
             </div>""", unsafe_allow_html=True)
 
     # ── SECTION 2: AI Decision + Forecast ────────────────────────────────────
@@ -471,14 +571,24 @@ def main():
     st.markdown('<div class="section-title">Manual Control</div>',
                 unsafe_allow_html=True)
 
+    # ── Show manual remaining time ────────────────────────────────────────────
+    manual_remaining = latest.get("manual_remaining", "") if has_data else ""
+    if manual_remaining:
+        st.markdown(
+            f'<div class="alert alert-orange">⏱️ Manual override active '
+            f'— auto-off in {manual_remaining}</div>',
+            unsafe_allow_html=True,
+        )
+
     mc1, mc2, mc3, mc4 = st.columns(4)
 
     with mc1:
-        if st.button("💧 Force Pump ON", key="force_on"):
+        MANUAL_TIMEOUT_MIN = 30
+        if st.button(f"💧 Force Pump ON ({MANUAL_TIMEOUT_MIN}min)", key="force_on"):
             db.save({
                 "timestamp"        : datetime.now(MOROCCO_TZ).isoformat(),
                 "decision_source"  : "MANUAL_ON",
-                "reason"           : "Manual override — user forced pump ON",
+                "reason"           : f"Manual override — pump ON (auto-off {MANUAL_TIMEOUT_MIN}min)",
                 "pump_on"          : True,
                 "water_SOIL"       : water,
                 "temp_SOIL"        : temp,
@@ -491,7 +601,7 @@ def main():
                 "strategic_label"  : strat_lbl,
                 "strategic_power"  : strat_pwr,
             })
-            st.success("✅ Pump forced ON — logged to database")
+            st.success(f"✅ Pump forced ON — auto-off in {MANUAL_TIMEOUT_MIN} min")
 
     with mc2:
         if st.button("🔴 Force Pump OFF", key="force_off"):

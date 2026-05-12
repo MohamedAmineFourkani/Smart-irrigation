@@ -13,12 +13,26 @@ from pathlib import Path
 from typing import Literal, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from data_fetcher import get_moisture_zone, ZONE_RED, ZONE_ORANGE, ZONE_GREEN
+from data_fetcher import (
+    get_moisture_zone, ZONE_RED, ZONE_ORANGE, ZONE_GREEN,
+    validate_sensor_reading, is_sensor_healthy,
+)
+from config import EMERGENCY_THRESHOLD, WET_THRESHOLD, MANUAL_PUMP_TIMEOUT_MIN
 from predictor import predict, predict_proba, ModelType
 from planner import IrrigationPlanner
 from forecaster import fetch_forecast, get_today_plan, print_forecast
 
 PUMP_STATE = {"on": False}
+
+
+def _fmt_td(td) -> str:
+    """Format a timedelta as 'Xh Ym' or 'Ym Zs'."""
+    total = int(td.total_seconds())
+    h, r  = divmod(total, 3600)
+    m, s  = divmod(r, 60)
+    if h:
+        return f"{h}h {m:02d}m"
+    return f"{m}m {s:02d}s"
 
 # ── Thresholds ────────────────────────────────────────────────────────────────
 EMERGENCY_THRESHOLD = 5.0    # < 5%  → emergency override, bypass all layers
@@ -45,6 +59,7 @@ class IrrigationController:
         self.verbose       = verbose
         self.planner       = IrrigationPlanner()
         self.audit_log     : list[dict] = []
+        self._manual_time  : Optional[datetime] = None  # when manual override started
 
         # ── Fetch strategic forecast once at startup ──────────────────────────
         print("\n  📡  Fetching 7-day strategic forecast...")
@@ -83,8 +98,35 @@ class IrrigationController:
         now             : Simulated or real timestamp
         manual_override : True = force ON, False = force OFF, None = auto
         """
-        now        = now or datetime.utcnow()
-        water_soil = sensor_reading["water_SOIL"]
+        now = now or datetime.utcnow()
+
+        # ── Sensor validation ──────────────────────────────────────────────────
+        val_result = validate_sensor_reading(sensor_reading)
+        if not val_result["valid"]:
+            record = {
+                "timestamp"        : now.isoformat(),
+                "model"            : self.model_type,
+                "temp_SOIL"        : val_result["sanitized"].get("temp_SOIL"),
+                "water_SOIL"       : val_result["sanitized"].get("water_SOIL"),
+                "conduct_SOIL"     : val_result["sanitized"].get("conduct_SOIL"),
+                "zone"             : "INVALID",
+                "zone_colour"      : "❌",
+                "strategic_cluster": self.today_plan["cluster"],
+                "strategic_label"  : self.today_plan["label"],
+                "strategic_power"  : self.today_plan["power"],
+                "ai_prediction"    : 0,
+                "ai_probability"   : 0.0,
+                "pump_on"          : False,
+                "decision_source"  : "INVALID_DATA",
+                "reason"           : f"Invalid sensor data: {'; '.join(val_result['errors'])}",
+            }
+            self.audit_log.append(record)
+            PUMP_STATE["on"] = False
+            if self.verbose:
+                self._print_status(record)
+            return record
+
+        water_soil = sensor_reading.get("water_SOIL", 0)
         zone       = get_moisture_zone(water_soil)
 
         # ── Layer 3: AI inference ─────────────────────────────────────────────
@@ -103,6 +145,17 @@ class IrrigationController:
         decision_source = "AUTO"
         reason          = ""
 
+        # ── Auto-expire previous manual override ──────────────────────────────
+        if self._manual_time is not None:
+            elapsed = now - self._manual_time
+            if elapsed.total_seconds() > MANUAL_PUMP_TIMEOUT_MIN * 60:
+                self._manual_time = None
+                manual_override_realized = False
+            else:
+                manual_override_realized = manual_override
+        else:
+            manual_override_realized = manual_override
+
         # ── Emergency override (< 5%) — bypasses all layers ──────────────────
         if water_soil < EMERGENCY_THRESHOLD:
             pump_on         = True
@@ -113,12 +166,16 @@ class IrrigationController:
             )
 
         # ── Manual override ───────────────────────────────────────────────────
-        elif manual_override is True and water_soil < WET_THRESHOLD:
+        elif manual_override_realized is True and water_soil < WET_THRESHOLD:
+            if self._manual_time is None:
+                self._manual_time = now
             pump_on         = True
             decision_source = "MANUAL_ON"
-            reason          = "Manual override ON"
+            remaining       = MANUAL_PUMP_TIMEOUT_MIN * 60 - (now - self._manual_time).total_seconds()
+            reason          = f"Manual override ON (auto-off in {int(remaining//60)} min)"
 
-        elif manual_override is False:
+        elif manual_override_realized is not None and manual_override_realized is False:
+            self._manual_time = None
             pump_on         = False
             decision_source = "MANUAL_OFF"
             reason          = "Manual override OFF"
@@ -145,13 +202,26 @@ class IrrigationController:
         elif water_soil < ZONE_RED and ai_pred == 1:
             # Check strategic layer approves
             if strategic_power in ("FULL", "HALF"):
-                pump_on         = True
-                decision_source = "CONSENSUS"
-                reason          = (
-                    f"✅  Consensus: soil at {water_soil:.1f}% + "
-                    f"AI agrees + forecast is {strategic_label} "
-                    f"({strategic_power} irrigation)"
+                # ── Check planner cooldown + daily budget ─────────────────
+                plan = self.planner.recommend(
+                    water_soil, ai_pred, now=now
                 )
+                if not plan["irrigate"]:
+                    pump_on         = False
+                    decision_source = "PLANNER_VETO"
+                    reason          = (
+                        f"🛡️  Planner veto: {plan['reason']} "
+                        f"(daily: {plan['daily_used']} / {plan['daily_budget']})"
+                    )
+                else:
+                    pump_on         = True
+                    decision_source = "CONSENSUS"
+                    reason          = (
+                        f"✅  Consensus: soil at {water_soil:.1f}% + "
+                        f"AI agrees + forecast is {strategic_label} "
+                        f"({strategic_power} irrigation) "
+                        f"[daily: {plan['daily_used']} / {plan['daily_budget']}]"
+                    )
             else:
                 pump_on         = False
                 decision_source = "STRATEGIC_SKIP"
@@ -189,6 +259,21 @@ class IrrigationController:
 
         PUMP_STATE["on"] = pump_on
 
+        # ── Planner state and manual timeout (for all records) ─────────────────
+        pl = self.planner
+        plan_cooldown = ""
+        plan_daily    = f"{_fmt_td(pl._daily_total)} / {_fmt_td(pl.max_daily)}"
+        if pl._last_run and (now - pl._last_run) < pl.cooldown:
+            remaining = pl.cooldown - (now - pl._last_run)
+            plan_cooldown = _fmt_td(remaining)
+
+        manual_remaining = ""
+        if self._manual_time is not None:
+            elapsed = now - self._manual_time
+            left    = MANUAL_PUMP_TIMEOUT_MIN * 60 - elapsed.total_seconds()
+            if left > 0:
+                manual_remaining = _fmt_td(int(left))
+
         record = {
             "timestamp"        : now.isoformat(),
             "model"            : self.model_type,
@@ -204,6 +289,11 @@ class IrrigationController:
             # Layer 3
             "ai_prediction"    : ai_pred,
             "ai_probability"   : round(ai_proba, 4),
+            # Planner
+            "cooldown_remaining": plan_cooldown,
+            "daily_used"       : plan_daily,
+            # Manual
+            "manual_remaining" : manual_remaining,
             # Final
             "pump_on"          : pump_on,
             "decision_source"  : decision_source,

@@ -23,6 +23,7 @@ MOROCCO_TZ = timezone(timedelta(hours=1))
 SRC_DIR = Path(__file__).resolve().parent / "src"
 sys.path.insert(0, str(SRC_DIR))
 
+from config import LOOP_INTERVAL, FORECAST_REFRESH
 from data_fetcher import load_data, fetch_live_data
 from trainer import train_and_evaluate
 from controller import IrrigationController
@@ -30,8 +31,6 @@ from forecaster import fetch_forecast, print_forecast
 import database as db
 
 VALID_MODELS     = ("decision_tree", "random_forest", "xgboost_model")
-LOOP_INTERVAL    = 20 * 60        # 20 minutes in seconds
-FORECAST_REFRESH = 24 * 60 * 60  # refresh forecast every 24 hours
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -89,6 +88,33 @@ def run_live_loop(model_type: str):
         try:
             # ── Fetch live soil reading ───────────────────────────────────────
             reading = fetch_live_data()
+
+            # ── Check connection status ───────────────────────────────────────
+            sensor_connected = reading.get("_valid", False)
+            sensor_errors    = reading.get("_validation_errors", [])
+
+            if not sensor_connected:
+                error_msg = "; ".join(sensor_errors) or "Unknown fetch error"
+                print(f"  ⚠️  Sensor/API issue: {error_msg}")
+                db.save({
+                    "timestamp": datetime.now(MOROCCO_TZ).isoformat(),
+                    "decision_source": "SENSOR_OFFLINE",
+                    "reason"         : f"Sensor offline: {error_msg}",
+                    "pump_on"        : False,
+                    "water_SOIL"     : None,
+                    "temp_SOIL"      : None,
+                    "conduct_SOIL"   : None,
+                    "zone"           : "OFFLINE",
+                    "ai_prediction"  : 0,
+                    "ai_probability" : 0.0,
+                    "strategic_cluster": controller.today_plan["cluster"],
+                    "strategic_label"  : controller.today_plan["label"],
+                    "strategic_power"  : controller.today_plan["power"],
+                })
+                print(f"  ⏳  Retrying in 20 minutes...")
+                time.sleep(LOOP_INTERVAL)
+                continue
+
             print(
                 f"  📡  Sensor → "
                 f"temp: {reading['temp_SOIL']}°C  "

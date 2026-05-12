@@ -40,6 +40,7 @@ def fetch_forecast() -> pd.DataFrame:
                 "temperature_2m_max",
                 "temperature_2m_min",
                 "relative_humidity_2m_max",
+                "relative_humidity_2m_mean",
                 "wind_speed_10m_max",
                 "precipitation_sum",
                 "shortwave_radiation_sum",
@@ -49,6 +50,7 @@ def fetch_forecast() -> pd.DataFrame:
             "timezone"               : "Africa/Casablanca",
             "forecast_days"          : 7,
         },
+        timeout=15,
     )
     r.raise_for_status()
     json_data = r.json()
@@ -80,9 +82,9 @@ def fetch_forecast() -> pd.DataFrame:
 
     # ── 4. Compute enhanced metrics ───────────────────────────────────────────
     LOW_HUMIDITY_THRESHOLD = 30  # percent
-    humidity_max = df.get("relative_humidity_2m_max", pd.Series([None]*len(dates)))
-    humidity_min = df.get("relative_humidity_2m_min", pd.Series([None]*len(dates)))
-    temp_min     = df.get("temperature_2m_min",       pd.Series([None]*len(dates)))
+    humidity_max = df.get("relative_humidity_2m_max",  pd.Series([None]*len(dates)))
+    humidity_avg = df.get("relative_humidity_2m_mean", pd.Series([None]*len(dates)))
+    temp_min     = df.get("temperature_2m_min",        pd.Series([None]*len(dates)))
 
     low_humidity_events = (humidity_max < LOW_HUMIDITY_THRESHOLD).astype(int).values
 
@@ -97,8 +99,8 @@ def fetch_forecast() -> pd.DataFrame:
         "temp_max"            : X["temp"].values,
         "temp_min"            : temp_min.values,
         "humidity_max"        : humidity_max.values,
-        "humidity_min"        : humidity_min.values,
-        "humidity_avg"        : X["humidity"].values,
+        "humidity_avg"        : humidity_avg.values,
+        "humidity"            : X["humidity"].values,
         "low_humidity_event"  : low_humidity_events,
         "rain"                : X["rain"].values,
     })
@@ -122,6 +124,15 @@ def get_today_plan(forecast_df: pd.DataFrame) -> dict:
         row = forecast_df.iloc[[0]]
 
     r = row.iloc[0]
+
+    def _safe_float(val, default=0.0):
+        if val is None:
+            return default
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            return default
+
     return {
         "date"              : r["date"],
         "cluster"           : int(r["cluster"]),
@@ -129,11 +140,10 @@ def get_today_plan(forecast_df: pd.DataFrame) -> dict:
         "emoji"             : r["emoji"],
         "frequency"         : int(r["frequency"]),
         "power"             : r["power"],
-        "temp_max"          : float(r.get("temp_max", r.get("temp", 0))),
-        "temp_min"          : float(r.get("temp_min", 0)),
-        "humidity_max"      : float(r.get("humidity_max", r.get("humidity_avg", 0))),
-        "humidity_min"      : float(r.get("humidity_min", 0)),
-        "humidity_avg"      : float(r.get("humidity_avg", r.get("humidity", 0))),
+        "temp_max"          : _safe_float(r.get("temp_max")),
+        "temp_min"          : _safe_float(r.get("temp_min")),
+        "humidity_max"      : _safe_float(r.get("humidity_max")),
+        "humidity_avg"      : _safe_float(r.get("humidity_avg")),
         "low_humidity_event": bool(r.get("low_humidity_event", False)),
     }
 
@@ -145,13 +155,19 @@ def print_forecast(forecast_df: pd.DataFrame):
     print("=" * 72)
     for _, row in forecast_df.iterrows():
         low_flag = " !LOW" if row.get("low_humidity_event") else ""
+        hum_max = row.get("humidity_max")
+        if hum_max is None or pd.isna(hum_max):
+            hum_max = row.get("humidity", 0)
+        temp_max = row.get("temp_max")
+        if temp_max is None or pd.isna(temp_max):
+            temp_max = row.get("temp", 0)
         print(
             f"  {row['date'].strftime('%a %d %b')}  {row['emoji']}  "
             f"{row['label']:4s}  →  "
             f"{'x'+str(row['frequency'])+'/week':8s}  "
             f"Power: {row['power']:4s}  "
-            f"| Temp: {row.get('temp_max', row.get('temp', 0)):.1f}°C  "
-            f"Hum: {row.get('humidity_max', row.get('humidity_avg', 0)):.0f}%{low_flag}  "
+            f"| Temp: {float(temp_max):.1f}°C  "
+            f"Hum: {float(hum_max):.0f}%{low_flag}  "
             f"Rain: {row['rain']:.1f}mm"
         )
     print("=" * 72)

@@ -4,3 +4,4 @@ __pycache__/
 *.db
 .env
 src/Nouveau Text Document.txt
+test_output.txt

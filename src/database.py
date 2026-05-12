@@ -37,9 +37,28 @@ def init():
             strategic_power    TEXT,
             pump_on            INTEGER,
             decision_source    TEXT,
-            reason             TEXT
+            reason             TEXT,
+            model              TEXT,
+            cooldown_remaining TEXT,
+            daily_used         TEXT,
+            manual_remaining   TEXT
         )
     """)
+    conn.commit()
+
+    # ── Migrate: add missing columns (safe if already exist) ───────────────────
+    new_columns = [
+        "model TEXT",
+        "cooldown_remaining TEXT",
+        "daily_used TEXT",
+        "manual_remaining TEXT",
+    ]
+    existing = [row[1] for row in cursor.execute("PRAGMA table_info(irrigation_log)")]
+    for col_def in new_columns:
+        col_name = col_def.split()[0]
+        if col_name not in existing:
+            cursor.execute(f"ALTER TABLE irrigation_log ADD COLUMN {col_def}")
+
     conn.commit()
     conn.close()
     print(f"  ✅  Database ready → {DB_PATH}")
@@ -55,12 +74,14 @@ def save(record: dict):
             timestamp, temp_SOIL, water_SOIL, conduct_SOIL, BatV,
             zone, ai_prediction, ai_probability,
             strategic_cluster, strategic_label, strategic_power,
-            pump_on, decision_source, reason
+            pump_on, decision_source, reason,
+            model, cooldown_remaining, daily_used, manual_remaining
         ) VALUES (
             :timestamp, :temp_SOIL, :water_SOIL, :conduct_SOIL, :BatV,
             :zone, :ai_prediction, :ai_probability,
             :strategic_cluster, :strategic_label, :strategic_power,
-            :pump_on, :decision_source, :reason
+            :pump_on, :decision_source, :reason,
+            :model, :cooldown_remaining, :daily_used, :manual_remaining
         )
     """, {
         "timestamp"        : record.get("timestamp",
@@ -78,6 +99,10 @@ def save(record: dict):
         "pump_on"          : int(record.get("pump_on", 0)),
         "decision_source"  : record.get("decision_source"),
         "reason"           : record.get("reason"),
+        "model"            : record.get("model"),
+        "cooldown_remaining": record.get("cooldown_remaining"),
+        "daily_used"       : record.get("daily_used"),
+        "manual_remaining" : record.get("manual_remaining"),
     })
     conn.commit()
     conn.close()

@@ -448,45 +448,50 @@ def main():
                 </div>
             </div>""", unsafe_allow_html=True)
 
-    # ── SECTION 1b: Safety Status ─────────────────────────────────────────────
-    st.markdown('<div class="section-title">Safety Status</div>',
+    # ── SECTION 1b: Protection Status ──────────────────────────────────────────
+    st.markdown('<div class="section-title">Protection Status</div>',
                 unsafe_allow_html=True)
-
-    sa1, sa2, sa3 = st.columns(3)
 
     cd_remin  = latest.get("cooldown_remaining", "") if has_data else ""
     daily_use = latest.get("daily_used", "—") if has_data else "—"
 
+    cooldown_txt = cd_remin if cd_remin else "Ready"
+    cooldown_cls = "orange" if cd_remin else "green"
+
+    # ── Parse daily_used to check if budget is nearly full ─────────────────
+    budget_cls = "green"
+    if daily_use != "—":
+        try:
+            used_str = daily_use.split("/")[0].strip()
+            if used_str:
+                parts = used_str.split()
+                if "h" in used_str:
+                    used_min = int(parts[0]) * 60 + int(parts[1])
+                else:
+                    used_min = int(parts[0])
+                if used_min >= 50:
+                    budget_cls = "red"
+                elif used_min >= 40:
+                    budget_cls = "orange"
+        except (ValueError, IndexError):
+            pass
+
+    sa1, sa2 = st.columns(2)
+
     with sa1:
         st.markdown(f"""
             <div class="metric-card">
-                <div class="metric-label">⏳ Cooldown Remaining</div>
-                <div class="metric-value blue">
-                    {cd_remin if cd_remin else "None"}
-                </div>
-                <div class="metric-sub">Between irrigation cycles</div>
+                <div class="metric-label">⏱️ Cooldown Timer</div>
+                <div class="metric-value {cooldown_cls}">{cooldown_txt}</div>
+                <div class="metric-sub">Wait time before next irrigation cycle</div>
             </div>""", unsafe_allow_html=True)
 
     with sa2:
         st.markdown(f"""
             <div class="metric-card">
-                <div class="metric-label">📊 Daily Water Budget</div>
-                <div class="metric-value green">
-                    {daily_use}
-                </div>
-                <div class="metric-sub">Used / Max</div>
-            </div>""", unsafe_allow_html=True)
-
-    with sa3:
-        ai_prob = latest.get("ai_probability", 0) if has_data else 0
-        ai_pred = latest.get("ai_prediction", 0) if has_data else 0
-        ai_txt  = "IRRIGATE" if ai_pred else "NO ACTION"
-        ai_col  = "red" if ai_pred else "green"
-        st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-label">🤖 AI Model Status</div>
-                <div class="metric-value {ai_col}">{ai_txt}</div>
-                <div class="metric-sub">Confidence: {ai_prob:.0%}</div>
+                <div class="metric-label">📊 Daily Water Limit</div>
+                <div class="metric-value {budget_cls}">{daily_use}</div>
+                <div class="metric-sub">Irrigation used today / Maximum allowed</div>
             </div>""", unsafe_allow_html=True)
 
     # ── SECTION 2: AI Decision + Forecast ────────────────────────────────────

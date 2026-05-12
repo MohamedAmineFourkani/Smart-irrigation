@@ -296,6 +296,8 @@ def generate_alerts(latest, df):
 
         # ── Sensor connection status ──────────────────────────────────────────
         if ts is not None:
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=MOROCCO_TZ)
             age_min = (now_ts - ts).total_seconds() / 60
             if age_min > 60 and should_alert("sensor_offline"):
                 alerts.append(("red",    "📡", f"Sensor offline for {age_min:.0f} minutes!"))
@@ -370,6 +372,8 @@ def main():
     # ── Connection status ─────────────────────────────────────────────────────
     now_ts = datetime.now(MOROCCO_TZ)
     if ts is not None:
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=MOROCCO_TZ)
         age_min = (now_ts - ts).total_seconds() / 60
         if age_min < 30:
             conn_status = "🟢 Connected"

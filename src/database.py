@@ -127,8 +127,12 @@ def fetch(limit: int = None) -> pd.DataFrame:
     conn.close()
 
     # ── Convert types ─────────────────────────────────────────────────────────
-    df["timestamp"] = pd.to_datetime(df["timestamp"], format='ISO8601')
-    df["pump_on"]   = df["pump_on"].astype(bool)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], format='ISO8601', errors='coerce')
+    # Normalise to tz-naive (handle mixed tz-aware / tz-naive)
+    df["timestamp"] = df["timestamp"].apply(
+        lambda t: t.tz_localize(None) if hasattr(t, 'tz') and t.tz is not None else t
+    )
+    df["pump_on"]   = df["pump_on"].astype(bool).fillna(False)
 
     return df
 

@@ -521,16 +521,18 @@ def main():
             if v is None: return "—"
             try: return f"{float(v):.0%}"
             except: return "—"
+        def _s(v, d="—"):
+            return v if v is not None and v != "None" else d
 
         st.markdown(f"""
             <div class="decision-card">
                 <div class="layer-row">
                     <span class="layer-name">LAYER 1 — Strategic</span>
-                    <span class="badge {pwr_badge}">{strat_lbl} · {strat_pwr}</span>
+                    <span class="badge {pwr_badge}">{_s(strat_lbl)} · {_s(strat_pwr)}</span>
                 </div>
                 <div class="layer-row">
                     <span class="layer-name">LAYER 2 — Sensor</span>
-                    <span class="badge {z_badge}">{zone}</span>
+                    <span class="badge {z_badge}">{_s(zone)}</span>
                 </div>
                 <div class="layer-row">
                     <span class="layer-name">LAYER 3 — AI Model</span>

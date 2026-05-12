@@ -505,8 +505,8 @@ def main():
     col_dec, col_fore = st.columns([1, 2])
 
     with col_dec:
-        ai_pred   = latest.get("ai_prediction",  0)   if has_data else 0
-        ai_prob   = latest.get("ai_probability", 0)   if has_data else 0
+        ai_pred   = latest.get("ai_prediction")   if has_data else 0
+        ai_prob   = latest.get("ai_probability")  if has_data else 0
         strat_lbl = latest.get("strategic_label", "—") if has_data else "—"
         strat_pwr = latest.get("strategic_power", "—") if has_data else "—"
         reason    = latest.get("reason", "No data yet") if has_data else "No data yet"
@@ -516,6 +516,11 @@ def main():
         ai_txt    = "IRRIGATE"   if ai_pred else "NO ACTION"
         pwr_badge = badge_for_power(strat_pwr)
         z_badge   = badge_for_zone(zone)
+
+        def _pct(v):
+            if v is None: return "—"
+            try: return f"{float(v):.0%}"
+            except: return "—"
 
         st.markdown(f"""
             <div class="decision-card">
@@ -529,7 +534,7 @@ def main():
                 </div>
                 <div class="layer-row">
                     <span class="layer-name">LAYER 3 — AI Model</span>
-                    <span class="badge {ai_badge}">{ai_txt} ({ai_prob:.0%})</span>
+                    <span class="badge {ai_badge}">{ai_txt} ({_pct(ai_prob)})</span>
                 </div>
                 <div class="layer-row">
                     <span class="layer-name">FINAL DECISION</span>

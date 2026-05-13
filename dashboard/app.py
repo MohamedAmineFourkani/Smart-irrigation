@@ -456,8 +456,13 @@ def main():
     st.markdown('<div class="section-title">Protection Status</div>',
                 unsafe_allow_html=True)
 
-    cd_remin  = latest.get("cooldown_remaining", "") if has_data else ""
-    daily_use = latest.get("daily_used", "—") if has_data else "—"
+    cd_remin  = latest.get("cooldown_remaining") if has_data else ""
+    if not cd_remin:
+        cd_remin = ""
+
+    daily_use = latest.get("daily_used") if has_data else "—"
+    if not daily_use:
+        daily_use = "—"
 
     cooldown_txt = cd_remin if cd_remin else "Ready"
     cooldown_cls = "orange" if cd_remin else "green"
@@ -679,112 +684,87 @@ def main():
     else:
         df_plot = df.sort_values("timestamp")
 
-        ch1, ch2 = st.columns(2)
+        # ── Consistent chart template ─────────────────────────────────────────
+        _AXIS_STYLE = dict(gridcolor="#1e2e24", title="")
+        _LAYOUT = dict(paper_bgcolor="#111a15", plot_bgcolor="#111a15",
+                       font=dict(color="#6b8f77", size=11),
+                       margin=dict(l=40, r=20, t=40, b=20), height=280)
 
-        # ── Chart 1: Moisture over time ───────────────────────────────────────
+        # ── Row 1: Moisture + Temperature + Conductivity ─────────────────────
+        ch1, ch2, ch3 = st.columns(3)
+
         with ch1:
             fig = go.Figure()
             fig.add_trace(go.Scatter(
-                x=df_plot["timestamp"],
-                y=df_plot["water_SOIL"],
-                mode="lines+markers",
-                name="Moisture",
-                line=dict(color="#00c896", width=2),
-                marker=dict(size=4),
-                fill="tozeroy",
-                fillcolor="rgba(0,200,150,0.08)",
+                x=df_plot["timestamp"], y=df_plot["water_SOIL"],
+                mode="lines+markers", name="Moisture",
+                line=dict(color="#00c896", width=2), marker=dict(size=4),
+                fill="tozeroy", fillcolor="rgba(0,200,150,0.08)",
             ))
-            fig.add_hline(
-                y=15, line_dash="dash", line_color="#ef4444", opacity=0.6,
-                annotation_text="RED threshold (15%)",
-            )
-            fig.add_hline(
-                y=20, line_dash="dash", line_color="#f59e0b", opacity=0.6,
-                annotation_text="ORANGE threshold (20%)",
-            )
-            fig.update_layout(
-                title="Soil Moisture Over Time",
-                paper_bgcolor="#111a15",
-                plot_bgcolor="#111a15",
-                font=dict(color="#6b8f77", size=11),
-                xaxis=dict(gridcolor="#1e2e24", title=""),
-                yaxis=dict(gridcolor="#1e2e24", title="Moisture (%)"),
-                margin=dict(l=40, r=20, t=40, b=20),
-                height=280,
-            )
+            fig.add_hline(y=15, line_dash="dash", line_color="#ef4444", opacity=0.6,
+                          annotation_text="RED")
+            fig.add_hline(y=20, line_dash="dash", line_color="#f59e0b", opacity=0.6,
+                          annotation_text="ORANGE")
+            fig.update_layout(title="Soil Moisture", xaxis=_AXIS_STYLE,
+                              yaxis=dict(gridcolor="#1e2e24", title="%"), **_LAYOUT)
             st.plotly_chart(fig, use_container_width=True)
 
-        # ── Chart 2: Pump activations ─────────────────────────────────────────
         with ch2:
+            fig3 = go.Figure()
+            fig3.add_trace(go.Scatter(
+                x=df_plot["timestamp"], y=df_plot["temp_SOIL"],
+                mode="lines", name="Temp",
+                line=dict(color="#f59e0b", width=2),
+            ))
+            fig3.update_layout(title="Soil Temperature", xaxis=_AXIS_STYLE,
+                               yaxis=dict(gridcolor="#1e2e24", title="°C"), **_LAYOUT)
+            st.plotly_chart(fig3, use_container_width=True)
+
+        with ch3:
+            cond_available = "conduct_SOIL" in df_plot.columns and df_plot["conduct_SOIL"].notna().any()
+            if cond_available:
+                fig5 = go.Figure()
+                fig5.add_trace(go.Scatter(
+                    x=df_plot["timestamp"], y=df_plot["conduct_SOIL"],
+                    mode="lines", name="Conductivity",
+                    line=dict(color="#8b5cf6", width=2),
+                ))
+                fig5.update_layout(title="Soil Conductivity", xaxis=_AXIS_STYLE,
+                                   yaxis=dict(gridcolor="#1e2e24", title="µS/cm"), **_LAYOUT)
+                st.plotly_chart(fig5, use_container_width=True)
+            else:
+                st.markdown("""
+                    <div class="alert alert-blue">📭 No conductivity data yet</div>
+                """, unsafe_allow_html=True)
+
+        # ── Row 2: Pump activations + Decision breakdown ──────────────────────
+        ch4, ch5 = st.columns(2)
+
+        with ch4:
             pump_counts        = df_plot.copy()
             pump_counts["date"] = pd.to_datetime(
                 pump_counts["timestamp"]).dt.date
             daily = pump_counts.groupby("date")["pump_on"].sum().reset_index()
-
             fig2 = go.Figure(go.Bar(
-                x=daily["date"],
-                y=daily["pump_on"],
-                marker_color="#3b82f6",
-                opacity=0.8,
+                x=daily["date"], y=daily["pump_on"],
+                marker_color="#3b82f6", opacity=0.8,
             ))
-            fig2.update_layout(
-                title="Pump Activations per Day",
-                paper_bgcolor="#111a15",
-                plot_bgcolor="#111a15",
-                font=dict(color="#6b8f77", size=11),
-                xaxis=dict(gridcolor="#1e2e24", title=""),
-                yaxis=dict(gridcolor="#1e2e24", title="Activations"),
-                margin=dict(l=40, r=20, t=40, b=20),
-                height=280,
-            )
+            fig2.update_layout(title="Pump Activations per Day", xaxis=_AXIS_STYLE,
+                               yaxis=dict(gridcolor="#1e2e24", title="Count"), **_LAYOUT)
             st.plotly_chart(fig2, use_container_width=True)
 
-        ch3, ch4 = st.columns(2)
-
-        # ── Chart 3: Temperature trend ────────────────────────────────────────
-        with ch3:
-            fig3 = go.Figure()
-            fig3.add_trace(go.Scatter(
-                x=df_plot["timestamp"],
-                y=df_plot["temp_SOIL"],
-                mode="lines",
-                name="Temp",
-                line=dict(color="#f59e0b", width=2),
-            ))
-            fig3.update_layout(
-                title="Soil Temperature Trend",
-                paper_bgcolor="#111a15",
-                plot_bgcolor="#111a15",
-                font=dict(color="#6b8f77", size=11),
-                xaxis=dict(gridcolor="#1e2e24", title=""),
-                yaxis=dict(gridcolor="#1e2e24", title="°C"),
-                margin=dict(l=40, r=20, t=40, b=20),
-                height=280,
-            )
-            st.plotly_chart(fig3, use_container_width=True)
-
-        # ── Chart 4: Decision source breakdown ────────────────────────────────
-        with ch4:
+        with ch5:
             dec_counts         = df["decision_source"].value_counts().reset_index()
             dec_counts.columns = ["source", "count"]
             fig4 = px.pie(
-                dec_counts,
-                names="source",
-                values="count",
+                dec_counts, names="source", values="count",
                 color_discrete_sequence=[
                     "#00c896", "#3b82f6", "#f59e0b",
                     "#ef4444", "#8b5cf6", "#6b8f77",
                 ],
             )
-            fig4.update_layout(
-                title="Decision Source Breakdown",
-                paper_bgcolor="#111a15",
-                plot_bgcolor="#111a15",
-                font=dict(color="#6b8f77", size=11),
-                margin=dict(l=20, r=20, t=40, b=20),
-                height=280,
-                legend=dict(font=dict(color="#6b8f77")),
-            )
+            fig4.update_layout(title="Decision Source", **_LAYOUT,
+                               legend=dict(font=dict(color="#6b8f77")))
             st.plotly_chart(fig4, use_container_width=True)
 
         # ── Audit log table ───────────────────────────────────────────────────

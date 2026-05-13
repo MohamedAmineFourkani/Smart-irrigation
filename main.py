@@ -28,6 +28,7 @@ from data_fetcher import load_data, fetch_live_data
 from trainer import train_and_evaluate
 from controller import IrrigationController
 from forecaster import fetch_forecast, print_forecast
+from cluster_trainer import train as train_clusters
 import database as db
 
 VALID_MODELS     = ("decision_tree", "random_forest", "xgboost_model")
@@ -46,6 +47,11 @@ def parse_args():
         "--skip-train",
         action="store_true",
         help="Skip model training and use existing .pkl files",
+    )
+    p.add_argument(
+        "--train-clusters",
+        action="store_true",
+        help="Train NASA cluster models from data.csv and exit",
     )
     return p.parse_args()
 
@@ -171,6 +177,13 @@ def _print_summary():
 # ─────────────────────────────────────────────────────────────────────────────
 def main():
     args = parse_args()
+
+    # ── Step 0: Train cluster models if requested ─────────────────────────────
+    if args.train_clusters:
+        print("\n  🌍  Training NASA cluster models from data.csv...")
+        train_clusters()
+        print("\n  ✅  Cluster training complete. Run 'python main.py --skip-train' to start live loop.")
+        return
 
     # ── Step 1: Initialise database ───────────────────────────────────────────
     print("\n  🗄️   Initialising database...")

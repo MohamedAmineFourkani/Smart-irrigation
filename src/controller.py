@@ -136,9 +136,9 @@ class IrrigationController:
         )
 
         # ── Layer 1: Strategic plan for today ─────────────────────────────────
-        strategic_power    = self.today_plan["power"]     # FULL / HALF / NONE
-        strategic_label    = self.today_plan["label"]     # DRY / MILD / WET
-        strategic_cluster  = self.today_plan["cluster"]   # 0 / 1 / 2
+        strategic_power    = self.today_plan["power"]     # FULL / HALF / LOW / NONE
+        strategic_label    = self.today_plan["label"]     # VERY_DRY / DRY / MILD / WET / VERY_WET
+        strategic_cluster  = self.today_plan["cluster"]   # 0 .. 4
 
         # ── Decision logic ────────────────────────────────────────────────────
         pump_on         = False
@@ -201,7 +201,7 @@ class IrrigationController:
         # ── All 3 layers must agree ───────────────────────────────────────────
         elif water_soil < ZONE_RED and ai_pred == 1:
             # Check strategic layer approves
-            if strategic_power in ("FULL", "HALF"):
+            if strategic_power in ("FULL", "HALF", "LOW"):
                 # ── Check planner cooldown + daily budget ─────────────────
                 plan = self.planner.recommend(
                     water_soil, ai_pred, now=now

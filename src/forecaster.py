@@ -2,7 +2,7 @@
 forecaster.py
 ─────────────────────────────────────────────────────────────────────────────
 Strategic Layer — 7-day weather forecast + irrigation plan.
-Uses Open-Meteo API + irrigation_rf_model.pkl + scaler.pkl
+Uses Open-Meteo API + NASA-trained cluster models (nasa_scaler + nasa_rf_cluster)
 """
 
 import sys
@@ -17,9 +17,11 @@ MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
 
 # ── Cluster definitions ───────────────────────────────────────────────────────
 CLUSTER_PLAN = {
-    0: {"label": "DRY",  "emoji": "☀️ ", "frequency": 3, "power": "FULL"},
-    1: {"label": "MILD", "emoji": "🌤️ ", "frequency": 2, "power": "HALF"},
-    2: {"label": "WET",  "emoji": "🌧️ ", "frequency": 0, "power": "NONE"},
+    0: {"label": "VERY_DRY", "emoji": "🔥 ", "frequency": 4, "power": "FULL"},
+    1: {"label": "DRY",      "emoji": "☀️ ", "frequency": 3, "power": "FULL"},
+    2: {"label": "MILD",     "emoji": "🌤️ ", "frequency": 2, "power": "HALF"},
+    3: {"label": "WET",      "emoji": "🌧️ ", "frequency": 1, "power": "LOW"},
+    4: {"label": "VERY_WET", "emoji": "💧 ", "frequency": 0, "power": "NONE"},
 }
 
 # ── Location (Morocco) ────────────────────────────────────────────────────────
@@ -74,8 +76,8 @@ def fetch_forecast() -> pd.DataFrame:
     X.columns = ["temp", "humidity", "wind", "rain", "solar_rad", "pressure"]
 
     # ── 3. Scale + classify ───────────────────────────────────────────────────
-    scaler   = joblib.load(MODELS_DIR / "scaler.pkl")
-    rf_model = joblib.load(MODELS_DIR / "irrigation_rf_model.pkl")
+    scaler   = joblib.load(MODELS_DIR / "nasa_scaler.pkl")
+    rf_model = joblib.load(MODELS_DIR / "nasa_rf_cluster.pkl")
 
     X_scaled     = scaler.transform(X)
     predictions  = rf_model.predict(X_scaled)
@@ -104,12 +106,6 @@ def fetch_forecast() -> pd.DataFrame:
         "low_humidity_event"  : low_humidity_events,
         "rain"                : X["rain"].values,
     })
-
-    # ── Override to 0 irrigation if all 7 days are humid enough ───────────────
-    if low_humidity_events.sum() == 0:
-        results["frequency"] = 0
-        results["power"]     = "NONE"
-        results["label"]     = "WET"
 
     return results
 
